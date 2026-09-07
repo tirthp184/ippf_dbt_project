@@ -1,0 +1,43 @@
+name: 'ippf_phase3_poc'
+version: '1.0.0'
+config-version: 2
+
+profile: 'ippf_poc'   # not used by dbt Projects on Snowflake (connection is native),
+                       # kept for compatibility if ever run via local dbt Core too
+
+model-paths: ["models"]
+seed-paths: ["seeds"]
+test-paths: ["tests"]
+macro-paths: ["macros"]
+
+clean-targets:
+  - "target"
+  - "dbt_packages"
+
+seeds:
+  ippf_phase3_poc:
+    +schema: seeds        # all seeds load into IPPF_EDW.SEEDS
+
+models:
+  ippf_phase3_poc:
+    staging:
+      +schema: stg
+      +materialized: view          # thin, mechanical cleanup - cheap as views
+    intermediate:
+      +schema: stg
+      +materialized: view          # harmonization/reshaping logic - views for now,
+                                    # promoted to table only if perf requires it
+    marts:
+      edw:
+        dimensions:
+          +schema: edw
+          +materialized: table     # default: full-refresh table
+        facts:
+          +schema: edw
+          +materialized: table     # source-scoped full-refresh per fact
+      semantic:
+        +schema: semantic
+        +materialized: view
+      governance:
+        +schema: stg
+        +materialized: incremental

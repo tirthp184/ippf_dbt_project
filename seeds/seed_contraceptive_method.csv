@@ -1,0 +1,13 @@
+method_name_raw,method_category,is_total_rollup
+CYP Total,Rollup,True
+CYP - FVSC,Permanent,False
+CYP - MVSC,Permanent,False
+CYP Implant,LARC,False
+CYP IUD,LARC,False
+CYP Injectable,SARC,False
+CYP Oral Contraceptives,SARC,False
+CYP Patch/Ring,SARC,False
+CYP Emergency Contraception,SARC,False
+CYP Condoms,Barrier,False
+CYP Diaphragms/ Caps,Barrier,False
+CYP Spermicide,Barrier,False

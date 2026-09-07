@@ -1,0 +1,16 @@
+service_type_name,service_group,source_domain,is_srh,is_sgbv,is_total_rollup,conforms_to_humanitarian
+S+R (Service + Referrals) Total,SRH,DHIS,True,False,True,
+S+R Contraceptive,SRH,DHIS,True,False,False,FP services
+S+R Obstetrics,SRH,DHIS,True,False,False,Obst services
+S+R Gynaecology,SRH,DHIS,True,False,False,Gynaec. Services
+S+R HIV/AIDS,SRH,DHIS,True,False,False,HIV/AIDS services
+S+R STI/RTI,SRH,DHIS,True,False,False,STI services
+S+R Abortion,SRH,DHIS,True,False,False,Comprehensive abortion care services
+S+R Paediatrics,non-SRH,DHIS,False,False,False,Paediatric services
+S+R Subfertility,SRH,DHIS,True,False,False,Fertility services
+S+R Urology,non-SRH,DHIS,False,False,False,Urology services
+S+R Specialised SRH,SRH,DHIS,True,True,False,SGBV/Specialised services
+S+R Non SRH Medical,non-SRH,DHIS,False,False,False,non-SRH services
+S+R SRH Other,SRH,DHIS,True,False,False,
+SRH services,SRH,Humanitarian,True,False,True,
+non-SRH services,non-SRH,Humanitarian,False,False,True,

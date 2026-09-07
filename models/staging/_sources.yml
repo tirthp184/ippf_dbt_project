@@ -1,0 +1,16 @@
+version: 2
+
+sources:
+  - name: raw
+    database: IPPF_EDW
+    schema: RAW
+    tables:
+      - name: raw_membership_details
+      - name: raw_budget_focus_area
+      - name: raw_budget_expense
+      - name: raw_total_income
+      - name: raw_dhis_srh_service
+      - name: raw_dhis_cyp
+      - name: raw_dhis_clients_totals
+      - name: raw_humanitarian_er
+      - name: raw_humanitarian_training

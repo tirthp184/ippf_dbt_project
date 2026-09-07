@@ -1,0 +1,20 @@
+training_topic_name_raw,training_topic_name_std,is_safeguarding,is_youth_related
+ASRHiE (Youth),ASRHiE (Youth),False,True
+Abortion Care/ VCAT,Abortion Care/ VCAT,False,False
+BeMONC,BeMONC,False,False
+CMR,CMR,True,False
+Contraception,Contraception,False,False
+EPP,EPP,False,False
+GBV Fundamentals,GBV Fundamentals,True,False
+HIV/ STI,HIV/ STI,False,False
+MISP,MISP,False,False
+MISP ,MISP,False,False
+MISP ToT,MISP ToT,False,False
+MISP-Marginalised Group,MISP-Marginalised Group,True,False
+Media,Media,False,False
+Others,Others,False,False
+Psychosocial First Aid,Psychosocial First Aid,True,False
+Response Management,Response Management,False,False
+Safety & Security,Safety & Security,True,False
+Sim EX,Sim EX,False,False
+Supply Chain,Supply Chain,False,False

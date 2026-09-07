@@ -1,0 +1,7 @@
+user_email,region_code,country_iso3,ma_uin,function_role,access_level
+global.admin@ippf.org,,,,Global Admin,READ_WRITE
+eseaor.director@ippf.org,ESEAOR,,,Regional Director,READ
+sar.director@ippf.org,SAR,,,Regional Director,READ
+philippines.lead@ippf.org,,PHL,,Country Lead,READ
+fpop.finance@ippf.org,,,IPPF-MA-0001,MA Finance Lead,READ
+humanitarian.lead@ippf.org,,,,Humanitarian Programme Lead,READ

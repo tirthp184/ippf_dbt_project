@@ -1,0 +1,20 @@
+source_country_string,iso_alpha3,country_name_display,override_reason
+Niger,NER,Niger,confusable_wrong_match
+Republic of Korea,KOR,South Korea,confusable_wrong_match
+South Korea,KOR,South Korea,confusable
+North Korea,PRK,North Korea,confusable
+Democratic People's Republic of Korea,PRK,North Korea,confusable
+DPRK,PRK,North Korea,abbreviation
+Republic of the Congo,COG,Republic of the Congo,confusable
+Congo,COG,Republic of the Congo,confusable
+Democratic Republic of the Congo,COD,DR Congo,no_match_oddity
+DRC,COD,DR Congo,abbreviation
+Cape Verde,CPV,Cape Verde,name_variant
+Cape  Verde,CPV,Cape Verde,double_space_typo
+Lao PDR,LAO,Laos,abbreviation
+Laos,LAO,Laos,common_name
+Vietnam,VNM,Vietnam,common_name
+Tanzania,TZA,Tanzania,common_name
+Syria,SYR,Syria,common_name
+Bolivia,BOL,Bolivia,common_name
+Venezuela,VEN,Venezuela,common_name
