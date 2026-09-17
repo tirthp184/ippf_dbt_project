@@ -1,0 +1,1358 @@
+name: ippf_federation_analytics
+description: >
+  Semantic view over the IPPF Phase-3 conformed star schema. Covers business-plan
+  budgeting, member-association income, SRH service delivery and contraceptive
+  protection (DHIS2), client reach, and humanitarian response, service delivery
+  and training. Grain is annual for all measures except humanitarian response
+  start/end dates. Geography drills Global > Region > Country > Member
+  Association > Service Point.
+
+tables:
+
+  # ==========================================================================
+  # DIMENSIONS
+  # ==========================================================================
+
+  - name: dates
+    description: "Annual reporting calendar. All facts are annual grain and reference the year-end row."
+    base_table:
+      database: IPPF_EDW
+      schema: EDW
+      table: DIM_DATE
+    primary_key:
+      columns: [date_key]
+    dimensions:
+      - name: reporting_year
+        synonyms: ["year", "fiscal year", "reporting period", "calendar year"]
+        description: "Reporting year. Source data covers 2022-2025 for financials and humanitarian response; 2024-2025 only for DHIS service, CYP, client and training data."
+        expr: calendar_year
+        data_type: NUMBER
+        sample_values: ["2022", "2023", "2024", "2025"]
+    time_dimensions:
+      - name: full_date
+        synonyms: ["date"]
+        description: "Calendar date."
+        expr: full_date
+        data_type: DATE
+
+  - name: regions
+    description: "IPPF regional offices. A fixed set of six; never expands."
+    base_table:
+      database: IPPF_EDW
+      schema: SECURE
+      table: DIM_GEOGRAPHY
+    primary_key:
+      columns: [geography_key]
+    dimensions:
+      - name: region_code
+        synonyms: ["region", "regional office", "RO"]
+        description: "Canonical IPPF region code."
+        expr: region_code
+        data_type: VARCHAR
+        is_enum: true
+        sample_values: ["ESEAOR", "SAR", "AR", "AWR", "ACR", "ENR", "UNKNOWN"]
+      - name: region_name
+        synonyms: ["region full name"]
+        description: "Full region name, e.g. 'South Asia Region'."
+        expr: region_name
+        data_type: VARCHAR
+
+  - name: countries
+    description: "Countries, standardised to ISO 3166 alpha-3. Sample data covers ESEAOR and SAR regions."
+    base_table:
+      database: IPPF_EDW
+      schema: SECURE
+      table: DIM_COUNTRY
+    primary_key:
+      columns: [country_key]
+    dimensions:
+      - name: country_name
+        synonyms: ["country", "nation", "territory"]
+        description: "Common country name as shown on dashboards."
+        expr: country_name_display
+        data_type: VARCHAR
+        sample_values: ["India", "Bangladesh", "Nepal", "Philippines", "Vietnam", "Fiji", "Afghanistan", "Cambodia"]
+      - name: iso_code
+        synonyms: ["ISO code", "country code", "iso3"]
+        description: "ISO 3166 alpha-3 country code. NULL for unresolved placeholder countries."
+        expr: iso_alpha3
+        data_type: VARCHAR
+      - name: country_data_quality_status
+        description: "Whether this country's name resolved cleanly to ISO. 'NEEDS_REVIEW' indicates an unresolved placeholder."
+        expr: match_status
+        data_type: VARCHAR
+        is_enum: true
+        sample_values: ["CONFIRMED", "NEEDS_REVIEW"]
+
+  - name: member_associations
+    description: >
+      IPPF member associations (MAs), plus the IPPF Secretariat. Each organisation
+      has one permanent UIN (Unique Identification Number) that reconciles its
+      identity across all source systems. Organisations with unresolved identity
+      conflicts are excluded from this dimension entirely.
+    base_table:
+      definition: |
+        SELECT ma.*,
+               c.country_name_display  AS home_country_name,
+               g.region_name           AS home_region_name,
+               g.region_code           AS home_region_code
+        FROM IPPF_EDW.EDW.DIM_MEMBER_ASSOCIATION ma
+        LEFT JOIN IPPF_EDW.EDW.DIM_COUNTRY c
+          ON ma.home_country_key = c.country_key
+        LEFT JOIN IPPF_EDW.EDW.DIM_GEOGRAPHY g
+          ON c.geography_key = g.geography_key
+        WHERE EXISTS (
+          SELECT 1 FROM IPPF_EDW.EDW.SEC_ROLE_REGION r
+          WHERE r.role_name = CURRENT_ROLE()
+            AND (r.geography_key IS NULL OR r.geography_key = c.geography_key)
+        )
+    primary_key:
+      columns: [ma_key]
+    dimensions:
+      - name: ma_uin
+        synonyms: ["UIN", "unique identification number", "MA ID", "organisation ID"]
+        description: "Permanent unique identifier, format IPPF-MA-####. IPPF-MA-0000 is the reserved Secretariat entry."
+        expr: ma_uin
+        data_type: VARCHAR
+      - name: affiliate_name
+        synonyms: ["member association", "MA", "affiliate", "organisation", "partner", "association name"]
+        description: "Display name of the member association. Falls back to acronym or UIN when the full name is not available (~half of MAs lack a full name). Always non-NULL."
+        expr: COALESCE(affiliate_name, ma_acronym, ma_uin)
+        data_type: VARCHAR
+      - name: ma_acronym
+        synonyms: ["acronym", "short name", "MA code"]
+        description: "Member association acronym, e.g. FPAN, IPPA, VINAFPA."
+        expr: ma_acronym
+        data_type: VARCHAR
+      - name: org_type
+        synonyms: ["organisation type", "entity type"]
+        description: "Whether the organisation is a Member Association or the IPPF Secretariat."
+        expr: org_type
+        data_type: VARCHAR
+        is_enum: true
+        sample_values: ["Member Association", "Secretariat", "Unknown"]
+      - name: has_business_plan
+        synonyms: ["business plan participant", "has financial data"]
+        description: "TRUE if this organisation submits a Business Plan and therefore has budget/income data. Humanitarian-only MAs are FALSE."
+        expr: has_business_plan
+        data_type: BOOLEAN
+      - name: home_country_name
+        synonyms: ["MA country", "home country", "country of member association"]
+        description: "Country where the member association is based."
+        expr: home_country_name
+        data_type: VARCHAR
+      - name: home_region_name
+        synonyms: ["MA region", "home region", "region of member association"]
+        description: "IPPF region where the member association is based. Use this for regional analysis of budget and income data."
+        expr: home_region_name
+        data_type: VARCHAR
+      - name: home_region_code
+        synonyms: ["region code", "region abbreviation", "SAR", "ESEAOR", "ACR", "AR", "AWR", "ENR"]
+        description: "Short code for the IPPF region. Use for filtering when users specify region abbreviations."
+        expr: home_region_code
+        data_type: VARCHAR
+        is_enum: true
+        sample_values: ["SAR", "ESEAOR", "ACR", "AR", "AWR", "ENR", "UNKNOWN"]
+
+  - name: focus_areas
+    description: "Business-plan focus areas (11) and their strategic priorities. Used for thematic investment analysis."
+    base_table:
+      database: IPPF_EDW
+      schema: EDW
+      table: DIM_FOCUS_AREA
+    primary_key:
+      columns: [focus_area_key]
+    dimensions:
+      - name: focus_area_name
+        synonyms: ["focus area", "programme area", "theme", "thematic area"]
+        description: "Business-plan focus area."
+        expr: focus_area_name
+        data_type: VARCHAR
+      - name: strategic_priority
+        synonyms: ["priority", "strategic objective"]
+        description: "The strategic priority this focus area belongs to."
+        expr: strategic_priority_name
+        data_type: VARCHAR
+      - name: is_advocacy
+        synonyms: ["advocacy", "advocacy related"]
+        description: "TRUE for advocacy-related focus areas."
+        expr: is_advocacy
+        data_type: BOOLEAN
+      - name: is_youth_related
+        synonyms: ["youth", "youth programme", "CSE", "comprehensive sexuality education"]
+        description: "TRUE for youth/CSE-related focus areas."
+        expr: is_youth_related
+        data_type: BOOLEAN
+
+  - name: expense_categories
+    description: "Budget cost types: Personnel, Direct project activities, Commodities, Indirect/Support costs."
+    base_table:
+      database: IPPF_EDW
+      schema: EDW
+      table: DIM_EXPENSE_CATEGORY
+    primary_key:
+      columns: [expense_category_key]
+    dimensions:
+      - name: expense_category_name
+        synonyms: ["expense category", "cost type", "cost category", "expenditure type"]
+        description: "Expense category."
+        expr: expense_category_name
+        data_type: VARCHAR
+        is_enum: true
+        sample_values: ["Personnel", "Direct project activities", "Commodities", "Indirect/Suppost costs"]
+      - name: is_commodity
+        synonyms: ["commodity", "supplies", "commodities spend"]
+        description: "TRUE for the Commodities category. Commodity budget execution is used as a supply-availability indicator."
+        expr: is_commodity
+        data_type: BOOLEAN
+
+  - name: projects
+    description: "Business-plan project descriptors."
+    base_table:
+      database: IPPF_EDW
+      schema: EDW
+      table: DIM_PROJECT
+    primary_key:
+      columns: [project_key]
+    dimensions:
+      - name: project_name
+        synonyms: ["project", "grant name", "programme"]
+        description: "Project name as reported in the business plan."
+        expr: project_name
+        data_type: VARCHAR
+
+  - name: service_types
+    description: >
+      Conformed service types shared by DHIS2 and humanitarian service delivery,
+      so volumes from both sources are comparable. IMPORTANT: rows where
+      is_rollup_total is TRUE are the source's own pre-aggregated totals - never
+      sum them together with the detail rows.
+    base_table:
+      database: IPPF_EDW
+      schema: EDW
+      table: DIM_SERVICE_TYPE
+    primary_key:
+      columns: [service_type_key]
+    dimensions:
+      - name: service_type_name
+        synonyms: ["service type", "service category", "service"]
+        description: "Type of service delivered, e.g. 'S+R Contraceptive', 'FP services', 'SGBV/Specialised services'."
+        expr: service_type_name
+        data_type: VARCHAR
+      - name: service_group
+        synonyms: ["SRH or non-SRH"]
+        description: "Whether the service is SRH or non-SRH."
+        expr: service_group
+        data_type: VARCHAR
+        is_enum: true
+        sample_values: ["SRH", "non-SRH"]
+      - name: is_srh
+        synonyms: ["SRH", "sexual and reproductive health"]
+        description: "TRUE for sexual and reproductive health services."
+        expr: is_srh
+        data_type: BOOLEAN
+      - name: is_sgbv
+        synonyms: ["SGBV", "gender based violence", "GBV", "safeguarding service"]
+        description: "TRUE for SGBV / specialised services. Used as the safeguarding service indicator."
+        expr: is_sgbv
+        data_type: BOOLEAN
+      - name: is_rollup_total
+        synonyms: ["total row", "pre-aggregated total"]
+        description: "TRUE if this row is a source-provided total. Exclude when summing detail, to avoid double counting."
+        expr: is_total_rollup
+        data_type: BOOLEAN
+
+  - name: contraceptive_methods
+    description: "Contraceptive methods for CYP reporting, classified by clinical category."
+    base_table:
+      database: IPPF_EDW
+      schema: EDW
+      table: DIM_CONTRACEPTIVE_METHOD
+    primary_key:
+      columns: [method_key]
+    dimensions:
+      - name: method_name
+        synonyms: ["method", "contraceptive method", "family planning method"]
+        description: "Contraceptive method, e.g. 'CYP IUD', 'CYP Implant', 'CYP Condoms'."
+        expr: method_name
+        data_type: VARCHAR
+      - name: method_category
+        synonyms: ["method type", "LARC", "SARC", "clinical category"]
+        description: "Clinical classification: LARC (long-acting reversible), SARC (short-acting reversible), Permanent, Barrier, Rollup."
+        expr: method_category
+        data_type: VARCHAR
+        is_enum: true
+        sample_values: ["LARC", "SARC", "Permanent", "Barrier", "Rollup"]
+      - name: is_rollup_total
+        description: "TRUE for the 'CYP Total' row. Exclude when summing individual methods."
+        expr: is_total_rollup
+        data_type: BOOLEAN
+
+  - name: disasters
+    description: "Humanitarian disaster taxonomy. displacement_context identifies conflict/displacement settings."
+    base_table:
+      database: IPPF_EDW
+      schema: EDW
+      table: DIM_DISASTER
+    primary_key:
+      columns: [disaster_key]
+    dimensions:
+      - name: disaster_category
+        synonyms: ["disaster type", "emergency type", "crisis type"]
+        description: "Broad disaster category."
+        expr: disaster_category
+        data_type: VARCHAR
+        is_enum: true
+        sample_values: ["Natural Hazards", "Man Made", "Complex"]
+      - name: disaster_sub_category
+        synonyms: ["disaster sub type", "specific emergency", "crisis"]
+        description: "Specific disaster type."
+        expr: disaster_sub_category
+        data_type: VARCHAR
+        is_enum: true
+        sample_values: ["Conflict", "Floods", "Typhoons/Cyclones", "Earthquakes/Tsunamis", "Disease Outbreak", "Displacement/Migration", "Protracted", "Landslides", "Volcanic eruptions"]
+      - name: displacement_context
+        synonyms: ["displacement", "refugee", "displaced", "conflict setting", "refugee setting", "internally displaced"]
+        description: >
+          TRUE for Conflict, Displacement/Migration and Protracted crises. This is
+          the available proxy for reach among displaced and refugee populations -
+          the source data has no direct refugee/IDP client-status field.
+        expr: displacement_context
+        data_type: BOOLEAN
+
+  - name: genders
+    description: "Client gender for humanitarian service delivery."
+    base_table:
+      database: IPPF_EDW
+      schema: EDW
+      table: DIM_GENDER
+    primary_key:
+      columns: [gender_key]
+    dimensions:
+      - name: gender
+        synonyms: ["sex", "client gender"]
+        description: "Gender of clients served."
+        expr: gender
+        data_type: VARCHAR
+        is_enum: true
+        sample_values: ["Male", "Female", "Non-Binary", "Unknown / Unresolved"]
+
+  - name: service_modes
+    description: "How a humanitarian service was delivered."
+    base_table:
+      database: IPPF_EDW
+      schema: EDW
+      table: DIM_SERVICE_MODE
+    primary_key:
+      columns: [service_mode_key]
+    dimensions:
+      - name: service_mode
+        synonyms: ["delivery mode", "service channel"]
+        description: "Clinical Service or Awareness Session."
+        expr: service_mode
+        data_type: VARCHAR
+        is_enum: true
+        sample_values: ["Clinical Service", "Awareness Session"]
+
+  - name: training_topics
+    description: "Humanitarian training topics, with safeguarding and youth classification."
+    base_table:
+      database: IPPF_EDW
+      schema: EDW
+      table: DIM_TRAINING_TOPIC
+    primary_key:
+      columns: [training_topic_key]
+    dimensions:
+      - name: training_topic_name
+        synonyms: ["training topic", "course", "training subject"]
+        description: "Training topic, e.g. 'MISP', 'GBV Fundamentals', 'ASRHiE (Youth)'."
+        expr: training_topic_name
+        data_type: VARCHAR
+      - name: is_safeguarding
+        synonyms: ["safeguarding", "protection training", "GBV training"]
+        description: "TRUE for safeguarding-related topics (GBV Fundamentals, Psychosocial First Aid, Safety & Security, CMR, MISP-Marginalised Group)."
+        expr: is_safeguarding
+        data_type: BOOLEAN
+      - name: is_youth_related
+        synonyms: ["youth training", "adolescent training"]
+        description: "TRUE for youth-focused topics."
+        expr: is_youth_related
+        data_type: BOOLEAN
+
+  - name: funding_streams
+    description: "Humanitarian funding streams."
+    base_table:
+      database: IPPF_EDW
+      schema: EDW
+      table: DIM_FUNDING
+    primary_key:
+      columns: [funding_key]
+    dimensions:
+      - name: funding_name
+        synonyms: ["funding", "funding stream", "fund", "donor", "funding source"]
+        description: "Funding stream name."
+        expr: funding_name
+        data_type: VARCHAR
+        is_enum: true
+        sample_values: ["JSB", "SPRINT", "HER Fund", "SRHiEP"]
+
+  # ==========================================================================
+  # FACTS
+  # ==========================================================================
+
+  - name: budget_by_focus_area
+    description: >
+      Business-plan budget and actual expenditure by focus area. Grain: member
+      association x year x project x focus area. Use for thematic investment and
+      budget-versus-actual analysis by programme area.
+    base_table:
+      database: IPPF_EDW
+      schema: SECURE
+      table: FACT_BUDGET_FOCUS_AREA
+    facts:
+      - name: budget_line_budget
+        description: "Budgeted amount, USD."
+        expr: budget_amount
+        data_type: NUMBER
+      - name: budget_line_actual
+        description: "Actual expenditure, USD."
+        expr: actual_amount
+        data_type: NUMBER
+    metrics:
+      - name: total_budget
+        synonyms: ["budget", "budgeted amount", "planned spend", "planned expenditure"]
+        description: "Total budgeted amount in USD."
+        expr: SUM(budget_amount)
+      - name: total_actual
+        synonyms: ["actual", "actual spend", "expenditure", "actual expenditure", "spend"]
+        description: "Total actual expenditure in USD."
+        expr: SUM(actual_amount)
+      - name: budget_variance
+        synonyms: ["variance", "budget variance", "over or underspend"]
+        description: "Actual minus budget, USD. Positive means overspent, negative means underspent."
+        expr: total_actual - total_budget
+      - name: budget_utilisation_rate
+        synonyms: ["utilisation", "utilisation rate", "burn rate", "absorption rate", "execution rate"]
+        description: "Actual divided by budget. 1.0 means spent exactly to budget; below 1.0 underspent; above 1.0 overspent."
+        expr: DIV0(total_actual, NULLIF(total_budget, 0))
+
+  - name: budget_by_expense_category
+    description: >
+      Business-plan budget and actual expenditure by cost type. Grain: member
+      association x year x project x expense category. IMPORTANT: this splits the
+      same budget a second, independent way - never combine with
+      budget_by_focus_area in one total, as that double counts.
+    base_table:
+      database: IPPF_EDW
+      schema: SECURE
+      table: FACT_BUDGET_EXPENSE
+    facts:
+      - name: expense_line_budget
+        description: "Budgeted amount, USD."
+        expr: budget_amount
+        data_type: NUMBER
+      - name: expense_line_actual
+        description: "Actual expenditure, USD."
+        expr: actual_amount
+        data_type: NUMBER
+    metrics:
+      - name: total_budget_by_category
+        synonyms: ["budget by cost type", "budgeted cost"]
+        description: "Total budgeted amount by expense category, USD."
+        expr: SUM(budget_amount)
+      - name: total_actual_by_category
+        synonyms: ["actual by cost type", "actual cost"]
+        description: "Total actual expenditure by expense category, USD."
+        expr: SUM(actual_amount)
+      - name: category_variance
+        synonyms: ["cost variance", "expense variance"]
+        description: "Actual minus budget by expense category, USD."
+        expr: total_actual_by_category - total_budget_by_category
+      - name: category_utilisation_rate
+        synonyms: ["cost utilisation", "commodity execution rate"]
+        description: "Actual divided by budget by expense category. Filtered to commodities, this is the supply-execution indicator."
+        expr: DIV0(total_actual_by_category, NULLIF(total_budget_by_category, 0))
+
+  - name: ma_income
+    description: >
+      Member association income by source. Grain: member association x year.
+      Used for funding diversification and financial self-sufficiency analysis.
+    base_table:
+      database: IPPF_EDW
+      schema: SECURE
+      table: FACT_MA_INCOME
+    facts:
+      - name: income_ippf
+        description: "Income received from IPPF, USD."
+        expr: ippf_income
+        data_type: NUMBER
+      - name: income_international
+        description: "International income from non-IPPF sources, USD."
+        expr: intl_income_non_ippf
+        data_type: NUMBER
+      - name: income_local
+        description: "Locally generated income, USD."
+        expr: locally_generated_income
+        data_type: NUMBER
+    metrics:
+      - name: total_ippf_income
+        synonyms: ["IPPF income", "IPPF funding", "core funding"]
+        description: "Total income from IPPF, USD."
+        expr: SUM(ippf_income)
+      - name: total_international_income
+        synonyms: ["international income", "non-IPPF income", "external funding"]
+        description: "Total international non-IPPF income, USD."
+        expr: SUM(intl_income_non_ippf)
+      - name: total_local_income
+        synonyms: ["local income", "locally generated income", "domestic income", "self-generated income"]
+        description: "Total locally generated income, USD."
+        expr: SUM(locally_generated_income)
+      - name: total_income
+        synonyms: ["income", "total revenue", "all income"]
+        description: "All income sources combined, USD."
+        expr: SUM(COALESCE(ippf_income,0) + COALESCE(intl_income_non_ippf,0) + COALESCE(locally_generated_income,0))
+      - name: self_sufficiency_ratio
+        synonyms: ["self sufficiency", "local income share", "financial independence"]
+        description: "Locally generated income as a share of total income. Higher means less dependent on external funding."
+        expr: DIV0(total_local_income, NULLIF(total_income, 0))
+      - name: ippf_dependency_ratio
+        synonyms: ["IPPF dependency", "core funding share"]
+        description: "IPPF income as a share of total income."
+        expr: DIV0(total_ippf_income, NULLIF(total_income, 0))
+
+  - name: srh_services
+    description: >
+      SRH service delivery from DHIS2. Grain: year x country x service type.
+      Covers 2024-2025 only. Filter service_types.is_rollup_total = FALSE when
+      summing across service types.
+    base_table:
+      database: IPPF_EDW
+      schema: SECURE
+      table: FACT_DHIS_SERVICE
+    facts:
+      - name: service_delivery_count
+        description: "Number of services delivered (services plus referrals)."
+        expr: service_count
+        data_type: NUMBER
+    metrics:
+      - name: services_delivered
+        synonyms: ["services", "services delivered", "service volume", "SRH services", "number of services"]
+        description: "Total services delivered. Exclude rollup-total service types to avoid double counting."
+        expr: SUM(service_count)
+
+  - name: cyp
+    description: >
+      Couple Years of Protection (CYP) from DHIS2 - the standard measure of
+      contraceptive protection provided. Grain: year x country x method.
+      Covers 2024-2025 only.
+    base_table:
+      database: IPPF_EDW
+      schema: SECURE
+      table: FACT_DHIS_CYP
+    facts:
+      - name: cyp_amount
+        description: "CYP value for this method, country and year."
+        expr: cyp_value
+        data_type: NUMBER
+    metrics:
+      - name: cyp_achieved
+        synonyms: ["CYP", "couple years of protection", "contraceptive protection", "CYP achieved"]
+        description: "Total Couple Years of Protection achieved. Exclude the rollup-total method to avoid double counting."
+        expr: SUM(cyp_value)
+
+  - name: client_reach
+    description: >
+      Client demographics and reach from DHIS2. Grain: year x country.
+      Covers 2024-2025 only. Note that service_delivery_points is semi-additive -
+      it counts facilities and must not be summed across years.
+    base_table:
+      database: IPPF_EDW
+      schema: SECURE
+      table: FACT_CLIENT_PROFILE
+    facts:
+      - name: clients_total_raw
+        description: "Estimated total clients."
+        expr: total_clients
+        data_type: NUMBER
+      - name: sdp_raw
+        description: "Number of service delivery points."
+        expr: sdp_count
+        data_type: NUMBER
+      - name: srh_services_0_24_raw
+        description: "SRH services/referrals for clients aged 0-24."
+        expr: srh_sr_0_24
+        data_type: NUMBER
+      - name: srh_services_total_raw
+        description: "Total SRH services/referrals (all ages)."
+        expr: srh_sr_total
+        data_type: NUMBER
+    metrics:
+      - name: total_clients_reached
+        synonyms: ["clients", "clients reached", "beneficiaries", "total clients", "people served"]
+        description: "Estimated total clients reached."
+        expr: SUM(total_clients)
+      - name: female_clients
+        synonyms: ["women served", "female beneficiaries"]
+        description: "Estimated female clients."
+        expr: SUM(female_clients)
+      - name: adolescent_clients
+        synonyms: ["adolescents", "clients aged 10-19", "teenagers"]
+        description: "Estimated clients aged 10-19."
+        expr: SUM(clients_10_19)
+      - name: youth_clients
+        synonyms: ["youth", "young people", "clients aged 10-24", "young clients"]
+        description: "Estimated clients aged 10-24."
+        expr: SUM(clients_10_24)
+      - name: poor_vulnerable_clients
+        synonyms: ["poor clients", "vulnerable clients", "marginalised clients"]
+        description: "Estimated poor and/or vulnerable clients."
+        expr: SUM(poor_vulnerable_clients)
+      - name: youth_srh_services
+        description: "Total SRH services/referrals for clients aged 0-24."
+        expr: SUM(srh_sr_0_24)
+      - name: total_srh_services
+        description: "Total SRH services/referrals (all ages)."
+        expr: SUM(srh_sr_total)
+      - name: youth_service_share
+        synonyms: ["youth percentage", "share of services to young people", "youth proportion"]
+        description: "Share of SRH services delivered to clients aged 0-24."
+        expr: DIV0(youth_srh_services, NULLIF(total_srh_services, 0))
+      - name: female_client_share
+        synonyms: ["female percentage", "proportion of women"]
+        description: "Female clients as a share of total clients."
+        expr: DIV0(female_clients, NULLIF(total_clients_reached, 0))
+      - name: poor_vulnerable_share
+        synonyms: ["vulnerable percentage", "equity share"]
+        description: "Poor/vulnerable clients as a share of total clients."
+        expr: DIV0(poor_vulnerable_clients, NULLIF(total_clients_reached, 0))
+      - name: service_delivery_points
+        synonyms: ["SDPs", "service delivery points", "clinics", "facilities", "number of clinics"]
+        description: "Count of service delivery points. Semi-additive - a point-in-time count, not summable across years."
+        expr: SUM(sdp_count)
+        non_additive_dimensions:
+          - table: dates
+            dimension: reporting_year
+            sort_direction: descending
+            null_order: last
+
+  - name: humanitarian_responses
+    description: >
+      Humanitarian emergency response events. Grain: one row per response event
+      (a grant responding to a specific crisis in a specific country and year).
+      Rows with unresolved region or organisation conflicts are excluded from this
+      table by design.
+    base_table:
+      database: IPPF_EDW
+      schema: SECURE
+      table: FACT_HUM_RESPONSE
+    primary_key:
+      columns: [response_key]
+    facts:
+      - name: grant_amount
+        description: "Grant amount for this response, USD."
+        expr: grant_usd
+        data_type: NUMBER
+      - name: reached
+        description: "Actual people reached."
+        expr: actual_people_reached
+        data_type: NUMBER
+    metrics:
+      - name: total_grant_usd
+        synonyms: ["humanitarian funding", "grant funding", "grant amount", "emergency funding"]
+        description: "Total humanitarian grant funding, USD."
+        expr: SUM(grant_usd)
+      - name: people_reached
+        synonyms: ["reached", "people reached", "beneficiaries reached", "actual reach"]
+        description: "Total people actually reached by humanitarian responses."
+        expr: SUM(actual_people_reached)
+      - name: people_targeted
+        synonyms: ["proposed reach", "target reach", "planned reach"]
+        description: "Total people the responses proposed to reach."
+        expr: SUM(proposed_people_reach)
+      - name: people_affected
+        synonyms: ["affected population", "crisis affected people"]
+        description: "Estimated people affected by the crises responded to."
+        expr: SUM(est_people_affected_alert)
+      - name: reach_achievement_rate
+        synonyms: ["reach achievement", "target achievement", "reach vs target"]
+        description: "Actual reach divided by proposed reach. Values above 1.0 indicate over-achievement, which is common and expected."
+        expr: DIV0(people_reached, NULLIF(people_targeted, 0))
+      - name: cost_per_person_reached
+        synonyms: ["cost per beneficiary", "unit cost", "cost efficiency", "cost per person"]
+        description: "Grant USD divided by people reached."
+        expr: DIV0(total_grant_usd, NULLIF(people_reached, 0))
+      - name: humanitarian_cyps
+        synonyms: ["humanitarian CYP"]
+        description: "CYPs delivered through humanitarian responses."
+        expr: SUM(cyps)
+      - name: pregnancies_averted
+        synonyms: ["unintended pregnancies averted", "pregnancies prevented"]
+        description: "Estimated unintended pregnancies averted."
+        expr: SUM(unintended_pregnancies_averted)
+      - name: maternal_deaths_averted
+        synonyms: ["maternal deaths prevented", "lives saved"]
+        description: "Estimated maternal deaths averted."
+        expr: SUM(maternal_deaths_averted)
+      - name: deliveries_conducted
+        synonyms: ["births", "deliveries"]
+        description: "Deliveries conducted."
+        expr: SUM(deliveries_conducted)
+      - name: clean_delivery_kits
+        synonyms: ["delivery kits"]
+        description: "Clean delivery kits distributed."
+        expr: SUM(clean_delivery_kits)
+      - name: dignity_kits
+        synonyms: ["hygiene kits", "dignity kits"]
+        description: "Dignity and hygiene kits distributed."
+        expr: SUM(dignity_hygiene_kits)
+      - name: response_count
+        synonyms: ["number of responses", "emergencies responded to", "response events"]
+        description: "Number of distinct humanitarian response events."
+        expr: COUNT(DISTINCT response_key)
+
+  - name: humanitarian_services
+    description: >
+      Services delivered within humanitarian responses, by conformed service type.
+      Grain: response event x service type. Conforms to the same service_types
+      dimension as srh_services, so the two are comparable.
+    base_table:
+      database: IPPF_EDW
+      schema: SECURE
+      table: FACT_HUM_SERVICE
+    facts:
+      - name: hum_service_count_raw
+        description: "Services delivered."
+        expr: service_count
+        data_type: NUMBER
+    metrics:
+      - name: humanitarian_services_delivered
+        synonyms: ["humanitarian services", "emergency services delivered", "crisis services"]
+        description: "Total services delivered in humanitarian settings. Exclude rollup-total service types when summing."
+        expr: SUM(service_count)
+
+  - name: humanitarian_services_by_gender
+    description: >
+      Gender-disaggregated humanitarian service delivery. Grain: response event x
+      gender x service mode. Use for gender-equity analysis of service access.
+    base_table:
+      database: IPPF_EDW
+      schema: SECURE
+      table: FACT_HUM_GENDER_SERVICE
+    facts:
+      - name: gender_service_count_raw
+        description: "Services delivered to this gender via this mode."
+        expr: service_count
+        data_type: NUMBER
+    metrics:
+      - name: services_by_gender
+        synonyms: ["gender disaggregated services", "services by sex"]
+        description: "Services delivered, broken down by client gender and delivery mode."
+        expr: SUM(service_count)
+
+  - name: humanitarian_training
+    description: >
+      Humanitarian capacity-building activity. Grain: year x organisation x country
+      x topic x funding stream. Includes training delivered directly by the IPPF
+      Secretariat as well as by member associations.
+    base_table:
+      database: IPPF_EDW
+      schema: SECURE
+      table: FACT_HUM_TRAINING
+    dimensions:
+      - name: conducted_by
+        synonyms: ["delivered by", "trainer", "who trained"]
+        description: "Whether the training was conducted by the IPPF Secretariat or by a Member Association."
+        expr: conducted_by
+        data_type: VARCHAR
+        is_enum: true
+        sample_values: ["IPPF", "MA"]
+    facts:
+      - name: training_count_raw
+        description: "Number of trainings."
+        expr: training_count
+        data_type: NUMBER
+      - name: people_trained_raw
+        description: "Number of people trained."
+        expr: people_trained
+        data_type: NUMBER
+    metrics:
+      - name: trainings_delivered
+        synonyms: ["trainings", "number of trainings", "training sessions", "courses delivered"]
+        description: "Total number of trainings delivered."
+        expr: SUM(training_count)
+      - name: total_people_trained
+        synonyms: ["trained", "people trained", "staff trained", "participants trained"]
+        description: "Total number of people trained."
+        expr: SUM(people_trained)
+
+# ============================================================================
+# RELATIONSHIPS
+# ============================================================================
+
+relationships:
+
+  # Geography hierarchy
+  - name: countries_to_regions
+    left_table: countries
+    right_table: regions
+    relationship_columns:
+      - left_column: geography_key
+        right_column: geography_key
+
+  # Budget by focus area
+  - name: budget_focus_area_to_dates
+    left_table: budget_by_focus_area
+    right_table: dates
+    relationship_columns:
+      - left_column: date_key
+        right_column: date_key
+  - name: budget_focus_area_to_mas
+    left_table: budget_by_focus_area
+    right_table: member_associations
+    relationship_columns:
+      - left_column: ma_key
+        right_column: ma_key
+  - name: budget_focus_area_to_projects
+    left_table: budget_by_focus_area
+    right_table: projects
+    relationship_columns:
+      - left_column: project_key
+        right_column: project_key
+  - name: budget_focus_area_to_focus_areas
+    left_table: budget_by_focus_area
+    right_table: focus_areas
+    relationship_columns:
+      - left_column: focus_area_key
+        right_column: focus_area_key
+
+  # Budget by expense category
+  - name: budget_expense_to_dates
+    left_table: budget_by_expense_category
+    right_table: dates
+    relationship_columns:
+      - left_column: date_key
+        right_column: date_key
+  - name: budget_expense_to_mas
+    left_table: budget_by_expense_category
+    right_table: member_associations
+    relationship_columns:
+      - left_column: ma_key
+        right_column: ma_key
+  - name: budget_expense_to_projects
+    left_table: budget_by_expense_category
+    right_table: projects
+    relationship_columns:
+      - left_column: project_key
+        right_column: project_key
+  - name: budget_expense_to_categories
+    left_table: budget_by_expense_category
+    right_table: expense_categories
+    relationship_columns:
+      - left_column: expense_category_key
+        right_column: expense_category_key
+
+  # Income
+  - name: income_to_dates
+    left_table: ma_income
+    right_table: dates
+    relationship_columns:
+      - left_column: date_key
+        right_column: date_key
+  - name: income_to_mas
+    left_table: ma_income
+    right_table: member_associations
+    relationship_columns:
+      - left_column: ma_key
+        right_column: ma_key
+
+  # SRH services
+  - name: srh_services_to_dates
+    left_table: srh_services
+    right_table: dates
+    relationship_columns:
+      - left_column: date_key
+        right_column: date_key
+  - name: srh_services_to_countries
+    left_table: srh_services
+    right_table: countries
+    relationship_columns:
+      - left_column: country_key
+        right_column: country_key
+  - name: srh_services_to_mas
+    left_table: srh_services
+    right_table: member_associations
+    relationship_columns:
+      - left_column: ma_key
+        right_column: ma_key
+  - name: srh_services_to_service_types
+    left_table: srh_services
+    right_table: service_types
+    relationship_columns:
+      - left_column: service_type_key
+        right_column: service_type_key
+
+  # CYP
+  - name: cyp_to_dates
+    left_table: cyp
+    right_table: dates
+    relationship_columns:
+      - left_column: date_key
+        right_column: date_key
+  - name: cyp_to_countries
+    left_table: cyp
+    right_table: countries
+    relationship_columns:
+      - left_column: country_key
+        right_column: country_key
+  - name: cyp_to_mas
+    left_table: cyp
+    right_table: member_associations
+    relationship_columns:
+      - left_column: ma_key
+        right_column: ma_key
+  - name: cyp_to_methods
+    left_table: cyp
+    right_table: contraceptive_methods
+    relationship_columns:
+      - left_column: method_key
+        right_column: method_key
+
+  # Client reach
+  - name: client_reach_to_dates
+    left_table: client_reach
+    right_table: dates
+    relationship_columns:
+      - left_column: date_key
+        right_column: date_key
+  - name: client_reach_to_countries
+    left_table: client_reach
+    right_table: countries
+    relationship_columns:
+      - left_column: country_key
+        right_column: country_key
+  - name: client_reach_to_mas
+    left_table: client_reach
+    right_table: member_associations
+    relationship_columns:
+      - left_column: ma_key
+        right_column: ma_key
+
+  # Humanitarian responses
+  - name: hum_responses_to_dates
+    left_table: humanitarian_responses
+    right_table: dates
+    relationship_columns:
+      - left_column: date_key
+        right_column: date_key
+  - name: hum_responses_to_countries
+    left_table: humanitarian_responses
+    right_table: countries
+    relationship_columns:
+      - left_column: country_key
+        right_column: country_key
+  - name: hum_responses_to_mas
+    left_table: humanitarian_responses
+    right_table: member_associations
+    relationship_columns:
+      - left_column: ma_key
+        right_column: ma_key
+  - name: hum_responses_to_disasters
+    left_table: humanitarian_responses
+    right_table: disasters
+    relationship_columns:
+      - left_column: disaster_key
+        right_column: disaster_key
+  - name: hum_responses_to_funding
+    left_table: humanitarian_responses
+    right_table: funding_streams
+    relationship_columns:
+      - left_column: funding_key
+        right_column: funding_key
+
+  # Humanitarian services
+  - name: hum_services_to_dates
+    left_table: humanitarian_services
+    right_table: dates
+    relationship_columns:
+      - left_column: date_key
+        right_column: date_key
+  - name: hum_services_to_countries
+    left_table: humanitarian_services
+    right_table: countries
+    relationship_columns:
+      - left_column: country_key
+        right_column: country_key
+  - name: hum_services_to_mas
+    left_table: humanitarian_services
+    right_table: member_associations
+    relationship_columns:
+      - left_column: ma_key
+        right_column: ma_key
+  - name: hum_services_to_disasters
+    left_table: humanitarian_services
+    right_table: disasters
+    relationship_columns:
+      - left_column: disaster_key
+        right_column: disaster_key
+  - name: hum_services_to_service_types
+    left_table: humanitarian_services
+    right_table: service_types
+    relationship_columns:
+      - left_column: service_type_key
+        right_column: service_type_key
+
+  # Humanitarian services by gender
+  - name: hum_gender_to_dates
+    left_table: humanitarian_services_by_gender
+    right_table: dates
+    relationship_columns:
+      - left_column: date_key
+        right_column: date_key
+  - name: hum_gender_to_countries
+    left_table: humanitarian_services_by_gender
+    right_table: countries
+    relationship_columns:
+      - left_column: country_key
+        right_column: country_key
+  - name: hum_gender_to_mas
+    left_table: humanitarian_services_by_gender
+    right_table: member_associations
+    relationship_columns:
+      - left_column: ma_key
+        right_column: ma_key
+  - name: hum_gender_to_genders
+    left_table: humanitarian_services_by_gender
+    right_table: genders
+    relationship_columns:
+      - left_column: gender_key
+        right_column: gender_key
+  - name: hum_gender_to_modes
+    left_table: humanitarian_services_by_gender
+    right_table: service_modes
+    relationship_columns:
+      - left_column: service_mode_key
+        right_column: service_mode_key
+
+  # Humanitarian training
+  - name: hum_training_to_dates
+    left_table: humanitarian_training
+    right_table: dates
+    relationship_columns:
+      - left_column: date_key
+        right_column: date_key
+  - name: hum_training_to_countries
+    left_table: humanitarian_training
+    right_table: countries
+    relationship_columns:
+      - left_column: country_key
+        right_column: country_key
+  - name: hum_training_to_mas
+    left_table: humanitarian_training
+    right_table: member_associations
+    relationship_columns:
+      - left_column: ma_key
+        right_column: ma_key
+  - name: hum_training_to_topics
+    left_table: humanitarian_training
+    right_table: training_topics
+    relationship_columns:
+      - left_column: training_topic_key
+        right_column: training_topic_key
+  - name: hum_training_to_funding
+    left_table: humanitarian_training
+    right_table: funding_streams
+    relationship_columns:
+      - left_column: funding_key
+        right_column: funding_key
+
+# ============================================================================
+# CUSTOM INSTRUCTIONS
+# ============================================================================
+
+module_custom_instructions:
+
+  sql_generation: |
+    CRITICAL - avoid double counting pre-aggregated totals:
+    When summing across service types, always add
+    service_types.is_rollup_total = FALSE. When summing across contraceptive
+    methods, always add contraceptive_methods.is_rollup_total = FALSE. These
+    rollup rows are source-provided totals; including them double counts.
+
+    CRITICAL - never combine the two budget tables in one figure:
+    budget_by_focus_area and budget_by_expense_category split the SAME budget
+    two independent ways. Answer budget questions from ONE of them, chosen by
+    what the user asked about (programme area vs cost type). Never sum or union
+    them together.
+
+    CRITICAL - counting member associations:
+    When counting MAs (e.g. "how many member associations in X"), always use
+    COUNT(DISTINCT ma_uin), never COUNT(DISTINCT affiliate_name). The ma_uin
+    column is the primary key and is never NULL. The affiliate_name column uses
+    COALESCE and is also safe for display, but ma_uin is the canonical
+    counting identifier.
+
+    Geographic dimensions for budget/income vs service data:
+    Budget and income data has no direct country link. Use
+    member_associations.home_region_name for regional analysis of budget and
+    income metrics. For SRH services, client reach, CYP, and humanitarian
+    data, use regions.region_name (the direct geographic path via country_key).
+    When a user asks about a specific country's budget (e.g. "Philippines budget"),
+    filter by member_associations.home_country_name - this is the MA based in
+    that country. Do NOT refuse or ask for clarification; the mapping from country
+    to member association is automatic.
+
+    Interpreting thematic filters in budget data:
+    When a user asks about "youth" in a budget context, filter by
+    focus_areas.is_youth_related = TRUE. When they ask about "advocacy",
+    filter by focus_areas.is_advocacy = TRUE. These boolean flags exist to map
+    natural language themes to budget focus areas. Always use them confidently -
+    do not refuse or ask the user to clarify what "youth" means.
+
+    Semi-additive measure: service_delivery_points counts facilities at a point
+    in time. Do not sum it across multiple years; report the most recent year or
+    state the year explicitly.
+
+    Unknown members: dimension key value -1 and the label
+    'Unknown / Unresolved' represent records whose dimension could not be
+    resolved. Three countries (Cambodia, South Korea, Hong Kong) have no linked
+    member association, so their DHIS service and CYP data appears against the
+    Unknown member association. Mention this if a question asks for a complete
+    breakdown by member association.
+
+    Year coverage differs by subject area. Financial (budget, income) and
+    humanitarian response data cover 2022-2025. SRH service delivery, CYP,
+    client reach and training data cover 2024-2025 ONLY. If a user asks for a
+    multi-year trend on service, CYP, client or training measures, state that
+    only 2024 and 2025 are available.
+
+    Known data gap: for SAR region in 2025 (and part of 2024 expense data),
+    roughly 1,400 budget lines have no financial figures in the source and load
+    as zero. When reporting SAR 2025 budget or actual figures, or when SAR
+    appears as an outlier with very low or zero spend, state that this reflects
+    incomplete source data rather than actual zero expenditure.
+
+    Refugee and displaced populations: the source data has no direct
+    refugee/IDP/host-community client-status field. Use
+    disasters.displacement_context = TRUE as a proxy and describe results as
+    "reach in displacement and conflict settings", never as verified refugee
+    counts.
+
+    Stock-outs: there is no commodity stock or stock-out data. If asked, explain
+    that the available indicators are commodity budget execution rate
+    (expense_categories.is_commodity = TRUE) and year-on-year change in
+    contraceptive method availability by country.
+
+    Format currency amounts with thousands separators and no decimal places.
+    Format ratios and shares as percentages with one decimal place.
+
+  question_categorization: |
+    Questions about safeguarding investment or gender-equality investment in
+    monetary terms cannot be answered directly - there is no budget tag for
+    either. Explain that safeguarding is measurable as service volume
+    (service_types.is_sgbv) and training effort
+    (training_topics.is_safeguarding), and gender equality as service-delivery
+    equity (humanitarian_services_by_gender), not as budgeted spend.
+
+    Questions asking for facility-level or clinic-level locations, coordinates,
+    or maps cannot be answered - the model holds only an aggregate count of
+    service delivery points, with no facility names or coordinates.
+
+    Questions asking for monthly or quarterly figures cannot be answered - all
+    measures are annual grain. Say so and offer the annual figure instead.
+
+    If a question about services, CYP, clients or training asks about a year
+    before 2024, say that this data is only available from 2024 onward.
+
+# ============================================================================
+# VERIFIED QUERIES
+# ============================================================================
+
+verified_queries:
+
+  - name: youth_budget_utilisation_by_country_year
+    question: "What was the budget utilisation rate for youth in the Philippines in 2024 and 2025?"
+    use_as_onboarding_question: false
+    sql: |
+      SELECT
+        d.calendar_year,
+        ma.affiliate_name,
+        fa.focus_area_name,
+        SUM(f.budget_amount) AS total_budget,
+        SUM(f.actual_amount) AS total_actual,
+        DIV0(SUM(f.actual_amount), NULLIF(SUM(f.budget_amount), 0)) AS budget_utilisation_rate
+      FROM IPPF_EDW.SECURE.FACT_BUDGET_FOCUS_AREA f
+      JOIN IPPF_EDW.EDW.DIM_DATE d ON f.date_key = d.date_key
+      JOIN IPPF_EDW.EDW.DIM_MEMBER_ASSOCIATION ma ON f.ma_key = ma.ma_key
+      JOIN IPPF_EDW.EDW.DIM_COUNTRY c ON ma.home_country_key = c.country_key
+      JOIN IPPF_EDW.EDW.DIM_FOCUS_AREA fa ON f.focus_area_key = fa.focus_area_key
+      WHERE c.country_name_display = 'Philippines'
+        AND fa.is_youth_related = TRUE
+        AND d.calendar_year IN (2024, 2025)
+      GROUP BY d.calendar_year, ma.affiliate_name, fa.focus_area_name
+      ORDER BY d.calendar_year, fa.focus_area_name
+
+  - name: total_services_by_region_year
+    question: "How many SRH services were delivered by region in 2025?"
+    use_as_onboarding_question: true
+    sql: |
+      SELECT
+        g.region_name,
+        SUM(f.service_count) AS services_delivered
+      FROM IPPF_EDW.EDW.FACT_DHIS_SERVICE f
+      JOIN IPPF_EDW.EDW.DIM_DATE d ON f.date_key = d.date_key
+      JOIN IPPF_EDW.EDW.DIM_COUNTRY c ON f.country_key = c.country_key
+      JOIN IPPF_EDW.EDW.DIM_GEOGRAPHY g ON c.geography_key = g.geography_key
+      JOIN IPPF_EDW.EDW.DIM_SERVICE_TYPE st ON f.service_type_key = st.service_type_key
+      WHERE d.calendar_year = 2025
+        AND st.is_total_rollup = FALSE
+      GROUP BY g.region_name
+      ORDER BY services_delivered DESC
+
+  - name: budget_utilisation_by_ma
+    question: "Which member associations underspent their budget the most in 2024?"
+    use_as_onboarding_question: true
+    sql: |
+      SELECT
+        ma.affiliate_name,
+        ma.ma_uin,
+        SUM(f.budget_amount) AS total_budget,
+        SUM(f.actual_amount) AS total_actual,
+        DIV0(SUM(f.actual_amount), NULLIF(SUM(f.budget_amount),0)) AS utilisation_rate
+      FROM IPPF_EDW.EDW.FACT_BUDGET_FOCUS_AREA f
+      JOIN IPPF_EDW.EDW.DIM_DATE d ON f.date_key = d.date_key
+      JOIN IPPF_EDW.EDW.DIM_MEMBER_ASSOCIATION ma ON f.ma_key = ma.ma_key
+      WHERE d.calendar_year = 2024
+      GROUP BY ma.affiliate_name, ma.ma_uin
+      HAVING SUM(f.budget_amount) > 0
+      ORDER BY utilisation_rate ASC
+      LIMIT 10
+
+  - name: cyp_by_method_category
+    question: "What is the CYP breakdown by contraceptive method category?"
+    sql: |
+      SELECT
+        d.calendar_year,
+        m.method_category,
+        SUM(f.cyp_value) AS cyp_achieved
+      FROM IPPF_EDW.EDW.FACT_DHIS_CYP f
+      JOIN IPPF_EDW.EDW.DIM_DATE d ON f.date_key = d.date_key
+      JOIN IPPF_EDW.EDW.DIM_CONTRACEPTIVE_METHOD m ON f.method_key = m.method_key
+      WHERE m.is_total_rollup = FALSE
+      GROUP BY d.calendar_year, m.method_category
+      ORDER BY d.calendar_year, cyp_achieved DESC
+
+  - name: youth_service_share_by_country
+    question: "What percentage of services went to young people aged under 25, by country?"
+    use_as_onboarding_question: true
+    sql: |
+      SELECT
+        c.country_name_display,
+        d.calendar_year,
+        SUM(f.srh_sr_0_24) AS youth_services,
+        SUM(f.srh_sr_total) AS total_services,
+        DIV0(SUM(f.srh_sr_0_24), NULLIF(SUM(f.srh_sr_total),0)) AS youth_share
+      FROM IPPF_EDW.EDW.FACT_CLIENT_PROFILE f
+      JOIN IPPF_EDW.EDW.DIM_DATE d ON f.date_key = d.date_key
+      JOIN IPPF_EDW.EDW.DIM_COUNTRY c ON f.country_key = c.country_key
+      GROUP BY c.country_name_display, d.calendar_year
+      ORDER BY youth_share DESC
+
+  - name: humanitarian_reach_in_displacement_settings
+    question: "How many people did we reach in conflict and displacement settings?"
+    use_as_onboarding_question: true
+    sql: |
+      SELECT
+        d.calendar_year,
+        g.region_name,
+        dis.disaster_sub_category,
+        SUM(r.actual_people_reached) AS people_reached
+      FROM IPPF_EDW.EDW.FACT_HUM_RESPONSE r
+      JOIN IPPF_EDW.EDW.DIM_DATE d ON r.date_key = d.date_key
+      JOIN IPPF_EDW.EDW.DIM_COUNTRY c ON r.country_key = c.country_key
+      JOIN IPPF_EDW.EDW.DIM_GEOGRAPHY g ON c.geography_key = g.geography_key
+      JOIN IPPF_EDW.EDW.DIM_DISASTER dis ON r.disaster_key = dis.disaster_key
+      WHERE dis.displacement_context = TRUE
+      GROUP BY d.calendar_year, g.region_name, dis.disaster_sub_category
+      ORDER BY people_reached DESC
+
+  - name: cost_per_person_reached_by_funding
+    question: "What was the cost per person reached by funding stream?"
+    sql: |
+      SELECT
+        fu.funding_name,
+        d.calendar_year,
+        SUM(r.grant_usd) AS grant_usd,
+        SUM(r.actual_people_reached) AS people_reached,
+        DIV0(SUM(r.grant_usd), NULLIF(SUM(r.actual_people_reached),0)) AS cost_per_person
+      FROM IPPF_EDW.EDW.FACT_HUM_RESPONSE r
+      JOIN IPPF_EDW.EDW.DIM_DATE d ON r.date_key = d.date_key
+      JOIN IPPF_EDW.EDW.DIM_FUNDING fu ON r.funding_key = fu.funding_key
+      GROUP BY fu.funding_name, d.calendar_year
+      ORDER BY d.calendar_year, cost_per_person
+
+  - name: gender_equity_in_service_delivery
+    question: "What is the gender breakdown of humanitarian services delivered?"
+    sql: |
+      SELECT
+        d.calendar_year,
+        g.gender,
+        sm.service_mode,
+        SUM(gs.service_count) AS services
+      FROM IPPF_EDW.EDW.FACT_HUM_GENDER_SERVICE gs
+      JOIN IPPF_EDW.EDW.DIM_DATE d ON gs.date_key = d.date_key
+      JOIN IPPF_EDW.EDW.DIM_GENDER g ON gs.gender_key = g.gender_key
+      JOIN IPPF_EDW.EDW.DIM_SERVICE_MODE sm ON gs.service_mode_key = sm.service_mode_key
+      GROUP BY d.calendar_year, g.gender, sm.service_mode
+      ORDER BY d.calendar_year, services DESC
+
+  - name: self_sufficiency_by_ma
+    question: "Which member associations are most financially self-sufficient?"
+    sql: |
+      SELECT
+        ma.affiliate_name,
+        d.calendar_year,
+        SUM(f.locally_generated_income) AS local_income,
+        SUM(COALESCE(f.ippf_income,0) + COALESCE(f.intl_income_non_ippf,0)
+            + COALESCE(f.locally_generated_income,0)) AS total_income,
+        DIV0(SUM(f.locally_generated_income),
+             NULLIF(SUM(COALESCE(f.ippf_income,0) + COALESCE(f.intl_income_non_ippf,0)
+                        + COALESCE(f.locally_generated_income,0)),0)) AS self_sufficiency_ratio
+      FROM IPPF_EDW.EDW.FACT_MA_INCOME f
+      JOIN IPPF_EDW.EDW.DIM_DATE d ON f.date_key = d.date_key
+      JOIN IPPF_EDW.EDW.DIM_MEMBER_ASSOCIATION ma ON f.ma_key = ma.ma_key
+      GROUP BY ma.affiliate_name, d.calendar_year
+      ORDER BY self_sufficiency_ratio DESC NULLS LAST
+
+  - name: safeguarding_effort
+    question: "How much safeguarding work did we do, in services and training?"
+    sql: |
+      SELECT
+        d.calendar_year,
+        g.region_name,
+        SUM(hs.service_count) AS sgbv_services
+      FROM IPPF_EDW.EDW.FACT_HUM_SERVICE hs
+      JOIN IPPF_EDW.EDW.DIM_DATE d ON hs.date_key = d.date_key
+      JOIN IPPF_EDW.EDW.DIM_COUNTRY c ON hs.country_key = c.country_key
+      JOIN IPPF_EDW.EDW.DIM_GEOGRAPHY g ON c.geography_key = g.geography_key
+      JOIN IPPF_EDW.EDW.DIM_SERVICE_TYPE st ON hs.service_type_key = st.service_type_key
+      WHERE st.is_sgbv = TRUE
+      GROUP BY d.calendar_year, g.region_name
+      ORDER BY d.calendar_year, sgbv_services DESC
+
+  - name: commodity_execution_rate
+    question: "How well are member associations executing their commodity budgets?"
+    sql: |
+      SELECT
+        ma.affiliate_name,
+        d.calendar_year,
+        SUM(f.budget_amount) AS commodity_budget,
+        SUM(f.actual_amount) AS commodity_actual,
+        DIV0(SUM(f.actual_amount), NULLIF(SUM(f.budget_amount),0)) AS execution_rate
+      FROM IPPF_EDW.EDW.FACT_BUDGET_EXPENSE f
+      JOIN IPPF_EDW.EDW.DIM_DATE d ON f.date_key = d.date_key
+      JOIN IPPF_EDW.EDW.DIM_MEMBER_ASSOCIATION ma ON f.ma_key = ma.ma_key
+      JOIN IPPF_EDW.EDW.DIM_EXPENSE_CATEGORY ec ON f.expense_category_key = ec.expense_category_key
+      WHERE ec.is_commodity = TRUE
+      GROUP BY ma.affiliate_name, d.calendar_year
+      HAVING SUM(f.budget_amount) > 0
+      ORDER BY execution_rate ASC

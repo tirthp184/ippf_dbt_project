@@ -14,6 +14,16 @@ clean-targets:
   - "target"
   - "dbt_packages"
 
+# PIPELINE_RUN_LOG must exist BEFORE any model runs (v_pipeline_run_status
+# selects from it), but the row can only be inserted AFTER the run completes
+# (results aren't known until then) - hence table creation in on-run-start,
+# insert in on-run-end. See macros/log_pipeline_run.sql.
+on-run-start:
+  - "{{ create_pipeline_run_log_table() }}"
+
+on-run-end:
+  - "{{ log_pipeline_run() }}"
+
 seeds:
   ippf_phase3_poc:
     +schema: seeds        # all seeds load into IPPF_EDW.SEEDS

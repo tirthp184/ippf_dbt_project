@@ -1,5 +1,5 @@
 service_type_name,service_group,source_domain,is_srh,is_sgbv,is_total_rollup,conforms_to_humanitarian
-S+R (Service + Referrals) Total,SRH,DHIS,True,False,True,
+S+R (Service + Referrals ) Total,SRH,DHIS,True,False,True,
 S+R Contraceptive,SRH,DHIS,True,False,False,FP services
 S+R Obstetrics,SRH,DHIS,True,False,False,Obst services
 S+R Gynaecology,SRH,DHIS,True,False,False,Gynaec. Services

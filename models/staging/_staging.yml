@@ -1,0 +1,57 @@
+version: 2
+
+models:
+  - name: stg_membership
+    columns:
+      - name: entity_code
+        tests: [not_null]
+      - name: reporting_year
+        tests: [not_null]
+
+  - name: stg_budget_focus_area
+    columns:
+      - name: entity_code
+        tests: [not_null]
+      - name: reporting_year
+        tests: [not_null]
+
+  - name: stg_budget_expense
+    columns:
+      - name: entity_code
+        tests: [not_null]
+
+  - name: stg_total_income
+    columns:
+      - name: entity_code
+        tests: [not_null]
+
+  - name: stg_dhis_srh_service
+    columns:
+      - name: country_name
+        tests: [not_null]
+      - name: reporting_year
+        tests: [not_null]
+
+  - name: stg_dhis_cyp
+    columns:
+      - name: country_name
+        tests: [not_null]
+
+  - name: stg_dhis_clients_totals
+    columns:
+      - name: country_name
+        tests: [not_null]
+
+  - name: stg_humanitarian_er
+    columns:
+      - name: country
+        tests: [not_null]
+      - name: member_association
+        tests: [not_null]
+      - name: reporting_year
+        tests: [not_null]
+
+  - name: stg_humanitarian_training
+    columns:
+      - name: country
+        tests: [not_null]
