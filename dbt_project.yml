@@ -20,6 +20,7 @@ clean-targets:
 # insert in on-run-end. See macros/log_pipeline_run.sql.
 on-run-start:
   - "{{ create_pipeline_run_log_table() }}"
+  - "{{ create_resolution_tables() }}"
 
 on-run-end:
   - "{{ log_pipeline_run() }}"

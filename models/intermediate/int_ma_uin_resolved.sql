@@ -6,6 +6,10 @@
 
 /*
   MA identity resolution — locked logic:
+    0. RESOLUTION_DECISIONS (decision_type='MA_HOME_COUNTRY') -> a steward
+       has confirmed which single country a multi-country-flagged acronym
+       (MA-02) actually belongs to. Overrides the REJECT below, whatever
+       acronym_country_span says.
     1. BP rows match on entity_code_num (the number in "CFPA (303)") — the
        most stable key available (verified zero drift across all 4 years).
     2. Humanitarian/Training rows match on normalized acronym. Verified: all
@@ -18,7 +22,7 @@
        sequential numbering across runs).
     4. MA-02: same acronym tied to >1 distinct country (e.g. SFPA -> Sudan,
        Syria) -> REJECT. No confident single home country -> quarantined,
-       not linked to any resolved organization.
+       not linked to any resolved organization. Resolvable via decision 0.
     5. MA-03/manual: IPPF (Secretariat) is NOT run through matching at all —
        it's a deliberate one-time onboarding, reserved UIN 'IPPF-MA-0000',
        org_type='Secretariat', match_method='MANUAL'. All 18 of its rows are
@@ -33,7 +37,14 @@
     - the literal 'IPPF' for the manual Secretariat entry
 */
 
-with bp_raw as (
+with ma_country_decisions as (
+    select upper(trim(raw_key)) as ma_acronym, resolved_value as decided_country_iso3, notes
+    from {{ target.database }}.STG.RESOLUTION_DECISIONS
+    where decision_type = 'MA_HOME_COUNTRY' and is_active
+    qualify row_number() over (partition by upper(trim(raw_key)) order by decided_at desc) = 1
+),
+
+bp_raw as (
     select
         upper(trim(split_part(entity_code, '(', 1)))          as ma_acronym,
         regexp_substr(entity_code, '[0-9]+')                   as entity_code_num,
@@ -234,20 +245,34 @@ resolved_new as (
         n.ma_acronym,
         null                                                     as affiliate_name,
         null                                                     as organisation_name_en,
-        acs.countries_seen                                       as home_country_iso3,  -- single value if unconflicted
+        coalesce(dec.decided_country_iso3, acs.countries_seen)   as home_country_iso3,
         'Member Association'                                     as org_type,
         false                                                     as has_business_plan,
         n.source_systems,
-        'NONE'                                                    as match_method,
+        case when dec.ma_acronym is not null then 'HUMAN_DECISION' else 'NONE' end as match_method,
         null::number                                              as match_confidence,
-        case when acs.distinct_country_count > 1 then 'NEEDS_REVIEW' else 'CONFIRMED' end as match_status,
-        case when acs.distinct_country_count > 1 then 'REJECT' else 'CONFIRMED' end as severity,
-        case when acs.distinct_country_count > 1
-             then n.ma_acronym || ' spans ' || acs.distinct_country_count || ' countries: ' || acs.countries_seen
-             else null end as review_note
+        case
+            when dec.ma_acronym is not null then 'CONFIRMED'
+            when acs.distinct_country_count > 1 then 'NEEDS_REVIEW'
+            else 'CONFIRMED'
+        end as match_status,
+        case
+            when dec.ma_acronym is not null then 'CONFIRMED'
+            when acs.distinct_country_count > 1 then 'REJECT'
+            else 'CONFIRMED'
+        end as severity,
+        case
+            when dec.ma_acronym is not null
+                 then 'MA-02 resolved via steward decision: ' || coalesce(dec.notes, dec.decided_country_iso3)
+            when acs.distinct_country_count > 1
+                 then n.ma_acronym || ' spans ' || acs.distinct_country_count || ' countries: ' || acs.countries_seen
+            else null
+        end as review_note
     from new_orgs n
     left join acronym_country_span acs
         on n.ma_acronym = acs.ma_acronym
+    left join ma_country_decisions dec
+        on n.ma_acronym = dec.ma_acronym
 ),
 
 -- Population C: IPPF Secretariat — manual onboarding, reserved UIN, never

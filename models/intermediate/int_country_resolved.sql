@@ -1,11 +1,15 @@
 {{
   config(
-    materialized = 'view'
+    materialized = 'table'
   )
 }}
 
 /*
   Country resolution — locked logic:
+    0. RESOLUTION_DECISIONS -> a human steward has already confirmed this
+       exact raw string via the conflict-resolution app. Takes precedence
+       over everything below -- checked first, and anything resolved here
+       is excluded from steps 1-4.
     1. seed_country_override.csv   -> deterministic (guards confusables like
                                        Niger/Nigeria, Republic of Korea/DPRK
                                        that fuzzy-matching gets WRONG; also
@@ -34,6 +38,13 @@ overrides as (
         country_name_display,
         override_reason
     from {{ ref('seed_country_override') }}
+),
+
+decisions as (
+    select upper(trim(raw_key)) as normalized_key, resolved_value as iso_alpha3
+    from {{ target.database }}.STG.RESOLUTION_DECISIONS
+    where decision_type = 'COUNTRY' and is_active
+    qualify row_number() over (partition by upper(trim(raw_key)) order by decided_at desc) = 1
 ),
 
 -- Every raw country string across all sources, in one shape.
@@ -100,6 +111,25 @@ distinct_raw_strings as (
     group by 1, 2
 ),
 
+-- Step 0: a human has already confirmed this exact raw string via the app.
+-- Takes precedence over everything below.
+step0_decision as (
+    select
+        d.raw_country_string,
+        d.normalized_key,
+        d.source_systems,
+        dec.iso_alpha3,
+        coalesce(r.country_name_common, r.country_name_iso_official, d.raw_country_string) as country_name_display,
+        'HUMAN_DECISION' as match_method,
+        null::number as match_confidence,
+        'CONFIRMED' as match_status
+    from distinct_raw_strings d
+    inner join decisions dec
+        on d.normalized_key = dec.normalized_key
+    left join iso_reference r
+        on dec.iso_alpha3 = r.iso_alpha3
+),
+
 -- Step 1: deterministic override
 step1_override as (
     select
@@ -114,6 +144,7 @@ step1_override as (
     from distinct_raw_strings d
     inner join overrides o
         on d.normalized_key = o.raw_country_key
+    where d.normalized_key not in (select normalized_key from step0_decision)
 ),
 
 -- Step 2: exact match to ISO (only for strings that didn't hit an override)
@@ -131,7 +162,8 @@ step2_exact as (
     inner join iso_reference r
         on upper(d.raw_country_string) = upper(r.country_name_iso_official)
         or upper(d.raw_country_string) = upper(r.country_name_common)
-    where d.normalized_key not in (select normalized_key from step1_override)
+    where d.normalized_key not in (select normalized_key from step0_decision)
+      and d.normalized_key not in (select normalized_key from step1_override)
 ),
 
 -- Step 3: fuzzy match >= 90 (only for strings that missed steps 1 and 2)
@@ -146,7 +178,8 @@ fuzzy_candidates as (
         jarowinkler_similarity(d.raw_country_string, r.country_name_common)       as sim_common
     from distinct_raw_strings d
     cross join iso_reference r
-    where d.normalized_key not in (select normalized_key from step1_override)
+    where d.normalized_key not in (select normalized_key from step0_decision)
+      and d.normalized_key not in (select normalized_key from step1_override)
       and d.normalized_key not in (select normalized_key from step2_exact)
 ),
 
@@ -191,6 +224,8 @@ step3_confirmed_only as (
     select * from step3_fuzzy where match_status = 'CONFIRMED'
 )
 
+select * from step0_decision
+union all
 select * from step1_override
 union all
 select * from step2_exact
